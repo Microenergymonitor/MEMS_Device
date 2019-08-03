@@ -19,6 +19,7 @@ Relay_3 <- hardware.pinC;
 Tem_T1 <-0;
 Tem_T2 <-0;
 Tem_T3 <-0;
+
 // Used to trigger Sensor Update
 SensorUpdate <- false;
 
@@ -26,36 +27,43 @@ SensorUpdate <- false;
 Tem_HIGH <--18;
 Tem_SAFE <--20.5;
 
+// This allows the device to wait on till its safe
 Tem_ONTILLSAFE_1 <- false;
 Tem_ONTILLSAFE_2 <- false;
 Tem_ONTILLSAFE_3 <- false;
 
-
 // Assign a global variable to state of the pulses
 pulse_count <- 0; 
+
 // Used to stop race condition
 pulse_state <- 1; 
 
 // Assign a global variable to track current state of Relay pin
 relayState_1 <- 0;
+
 // Assign a global variable to track current state of Relay pin
 relayState_2 <- 0;
+
 // Assign a global variable to track current state of Relay pin
 relayState_3 <- 0;
 
 // Assign a global variable to track slaves list for one wire
 slaves <- [];
+
 // global for all the unknown sensors
 Unknown_Sensor_IDs <-"";
+
 // #TODO Needs to add error code for units to let harry know if the temp sensor or relay are faulty..
 // Used to ensure we find all 3 if one is missing we set the relay to always off i.e. power to fridge as could be a faulty sensor.
 TemSensor1Found <- false;
 TemSensor2Found <- false;
 TemSensor3Found <- false;
+
 // Sensor Guard theses Globals are used to compare the values 
 local gTemCount1 = 3;
 local gTemCount2 = 3;
 local gTemCount3 = 3;
+
 // Assign a global variable to track state of connection.
 local disconnectedFlag = false;
 local disconnectedCount = 0;
@@ -75,6 +83,7 @@ deviceSettings.relayThreeSensorId <- "NULL";
 deviceSettings.relayThreeOnSetpoint <- -18;
 deviceSettings.relayThreeOffSetpoint <- -21;
 deviceSettings.settingsVersion <- -1;
+
 // Used to track and send the device data to the agent.
 local deviceReading = {};
 deviceReading.relayOneSensor <-100;
@@ -82,18 +91,20 @@ deviceReading.relayTwoSensor <-100;
 deviceReading.relayThreeSensor <-100;
 deviceReading.pulseCount <-0;
 deviceReading.UnknownDevices <-"NONE";
+
 // Last Update Time
 local LastUpdateTime = 0;
 
-
-//------------------------- Functions for Webserver ---------------------------
+// ********************* Functions for Webserver *********************
 function getData() 
 {
     //server.log(deviceReading.relayOneSensor);
+    //server.log(deviceReading.relayTwoSensor);
+    //server.log(deviceReading.relayThreeSensor);
+	
+    // Calcaulte the trigger is active.
     local trigger = (hardware.millis() - LastUpdateTime) > deviceSettings.deviceLoggingInterval.tointeger();
-    //server.log("Current Count : "+ (hardware.millis() - LastUpdateTime) );
     // Send the readings
-   // local trigger = true;
     if (trigger && (disconnectedFlag == false) )
     {
     // set the pluse count as pulse count
@@ -102,6 +113,9 @@ function getData()
     pulse_count = 0;
     agent.send("deviceReading", deviceReading);
     LastUpdateTime = hardware.millis();
+    local Temp1 = 0;
+    local Temp2 = 0;
+    local Temp3 = 0;
     }
     else if (trigger)
     {
@@ -109,7 +123,7 @@ function getData()
         LastUpdateTime = hardware.millis();
     }
 }
-//------------------------- Functions for returnFromAgent -------------------------
+//*********************Functions for returnFromAgent *********************
 function GetDeviceSettings(updateMessage) 
 {
   local jsonStringFromFlash = imp.getuserconfiguration();
@@ -117,7 +131,7 @@ function GetDeviceSettings(updateMessage)
 }
 // When we get a 'pong' message from the agent, call returnFromAgent()
 agent.on("GetDeviceSettings", GetDeviceSettings);
-//------------------------- Functions for returnFromAgent -------------------------
+//****************************  Functions for returnFromAgent *********************
 function returnFromAgent(updateMessage) 
 {
   server.log(updateMessage.relay + " " + updateMessage.sensor);
@@ -168,13 +182,12 @@ function updateFromDataBase(dataToSendToDevice)
   // Store the data as a converted String JSON
   server.log("Update received : " + dataToSendToDevice);
   settingFromiot <- JSONParser.parse(dataToSendToDevice.tostring());
- // if(settingFromiot.settingsVersion !=  deviceSettings.settingsVersion)
- // {
- //     imp.setuserconfiguration(dataToSendToDevice);
- //     server.log("Updating as version updated from "+ deviceSettings.settingsVersion +" to " + settingFromiot.settingsVersion);
- //     imp.reset();
-//  }
-  //imp.reset();
+  if(settingFromiot.settingsVersion !=  deviceSettings.settingsVersion)
+  {
+      imp.setuserconfiguration(dataToSendToDevice);
+      server.log("Updating as version updated from "+ deviceSettings.settingsVersion +" to " + settingFromiot.settingsVersion);
+      imp.reset();
+  }
 }
 // When we get a 'pong' message from the agent, call returnFromAgent()
 agent.on("updateFromDataBase", updateFromDataBase);
@@ -297,10 +310,7 @@ function getTemp() {
     local tempLSB = 0;
     local tempMSB = 0;
     local tempCelsius = 0;
-
-    // Wake up in five seconds for the next reading 
-   // imp.wakeup(5.0, getTemp);
-
+    
     // Reset the 1-Wire bus
     local result = onewireReset();
     TemSensor1Found = false;
@@ -422,7 +432,7 @@ function CheckSensorsAreValid ()
      gTemCount3 = 3;
  }
 }
- //**************************** Functions for DIGITAL IN PULES *****************************************//
+//**************************** Functions for DIGITAL IN PULES *****************************************//
 // Notes :: When using the 1 as the trigger there seemed to always be a extra sample as there are two cyclse to IO.
 // Using the Var pulse_state to catch this action...
 function PulseIn() 
@@ -547,7 +557,7 @@ function SetRelay()
         
     }
 }
-//**************************** Imp Reconnection *******************
+//****************************** Imp Reconnection  ******************************
 function mainProgramLoop() 
 {
   // Ensure the program loops safely every second
@@ -556,7 +566,7 @@ function mainProgramLoop()
   getData();
   imp.wakeup(1.0, mainProgramLoop);
 }
-//-------------------------- Connect - Reconnect ------------------------------
+//****************************** Connect - Reconnect ******************************
 function serverOut(reason)
 {
     // This function is called if the server connection is broken or re-established
@@ -575,7 +585,7 @@ function serverOut(reason)
         disconnectedFlag = false;
     }
 }
-//--------------------------restart ---------------------------------
+//******************************restart ******************************
 // Call restart if needed 
 function restart(duration)
 {
@@ -583,10 +593,7 @@ function restart(duration)
 }
 // When we get a 'restsrt' message from the agent, call restart()
 agent.on("restart", restart);
-//-------------------------Starting point ---------------------------- 
-
-
-
+//******************************Starting point ****************************** 
 // Configure the pulse to call PulseIn() when the pin's state changes
 server.log("MEMS 4.2: Harry Walsh & Robert Carroll")
 Pulseio.configure(DIGITAL_IN_PULLUP, PulseIn);
