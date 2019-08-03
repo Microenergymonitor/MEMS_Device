@@ -10,6 +10,7 @@ deviceReading.relayTwoSensor <-0;
 deviceReading.relayThreeSensor <-0;
 deviceReading.pulseCount <-0;
 deviceReading.UnknownDevices <-0;
+
 // Used to Store the MEMs Data for URL and also device id
 local MEMSData = {};
 MEMSData.deviceURL <- "Unknown";
@@ -25,13 +26,13 @@ local deviceStatus = device.isconnected();
 local ImpdeviceID = imp.configparams.deviceid;
 local serverDevice = "iot_" + ImpdeviceID ;
 server.log(serverDevice);
+// Used to send back to the device note you must update the FW Version
 local status = {
 "deviceid" : ImpdeviceID, 
 "deviceType" : "MEMSV4.2",
 "deviceStatus" : deviceStatus,
-"firmwareVersion" : "VERSION_2",
+"firmwareVersion" : "VERSION_2.1",
 "settingsVersion" : -1
-
 } ;
 
 // Number of seconds to wait before the next publishing
@@ -67,14 +68,14 @@ enum LOG_LEVEL {
     ERROR
 }
 
-CfgStateExample <- {
+MEMS_Device <- {
 
     // Here you can make a multi-level logger
     log = function(text, level = LOG_LEVEL.INFO) {
         if (level == LOG_LEVEL.INFO) {
-            server.log("[CfgStateExample] " + text);
+            server.log("[MEMS_Device] " + text);
         } else if (level == LOG_LEVEL.ERROR) {
-            server.error("[CfgStateExample] " + text);
+            server.error("[MEMS_Device] " + text);
         }
         // Logs can be sent to some server/cloud/etc.
     }
@@ -92,7 +93,7 @@ CfgStateExample <- {
         _privateKeyUrl = null;
 
         function constructor() {
-            _log = CfgStateExample.log;
+            _log = MEMS_Device.log;
         }
 
         function init(callback) {
@@ -172,10 +173,9 @@ CfgStateExample <- {
            device.send("updateFromDataBase", config);
            server.log(config);
            local result = JSONParser.parse(config.tostring());
-           //local settingToSave = {};
-          // local settingToSave = config;
-            server.save(result);
-           server.log("Sending .....")
+           // Save the data as JSON on the server incase server down
+           server.save(result);
+           server.log("Trying to update device .....")
             // Hdevice.send("updateFromDataBase", jsonString);ere we imitate sending of a configuration update to the imp-device
             // and then we imitate receiving of a state from the imp-device. This state is actually that configuration
             _onStateReceived(config);
@@ -203,9 +203,9 @@ CfgStateExample <- {
         _reconnectTimer      = null;
 
         function constructor() {
-            _log = CfgStateExample.log;
-            _appSettings = CfgStateExample.AppSettings();
-            _deviceCommunicator = CfgStateExample.DeviceCommunicator();
+            _log = MEMS_Device.log;
+            _appSettings = MEMS_Device.AppSettings();
+            _deviceCommunicator = MEMS_Device.DeviceCommunicator();
         }
 
         function start() {
@@ -243,9 +243,6 @@ CfgStateExample <- {
             // Here you can do some actions according to the configuration received
             // We will simply send the configuration to the imp-device
             // Save updated settings table to permanent storage
-            //local settings = JSONParser.parse(config);
-            
-           
             _deviceCommunicator.sendConfiguration(config);
         }
         function sendStatusOLOLUpdate() {
@@ -278,19 +275,19 @@ CfgStateExample <- {
         function publishTelemetry()
         {
              local body = {
-    "deviceURL" : MEMSData.deviceURL ,
-    "deviceid" : MEMSData.deviceid , 
-    "relayOneSensor" : deviceReading.relayOneSensor ,
-    "relayTwoSensor" : deviceReading.relayTwoSensor ,
-    "relayThreeSensor" : deviceReading.relayThreeSensor ,
-    "pulseCount" : deviceReading.pulseCount ,
-    "UnknownDevices" : deviceReading.UnknownDevices
-    } ;
+                "deviceURL" : MEMSData.deviceURL ,
+                "deviceid" : MEMSData.deviceid , 
+                "relayOneSensor" : deviceReading.relayOneSensor ,
+                "relayTwoSensor" : deviceReading.relayTwoSensor ,
+                "relayThreeSensor" : deviceReading.relayThreeSensor ,
+                "pulseCount" : deviceReading.pulseCount ,
+                "UnknownDevices" : deviceReading.UnknownDevices
+            } ;
 
-    // Convert to body
-    local jsonBody = http.jsonencode(body) ;
-        _googleIoTCoreClient.publish(jsonBody, null, onPublished.bindenv(this));
-         }
+            // Convert to body
+            local jsonBody = http.jsonencode(body) ;
+            _googleIoTCoreClient.publish(jsonBody, null, onPublished.bindenv(this));
+        }
     
         function onPublished(data, error) {
             if (error != 0) {
@@ -298,7 +295,6 @@ CfgStateExample <- {
                 return;
             }
             server.log("Telemetry has been published. Data = " + data);
-            //imp.wakeup(PUBLISH_DELAY, publishTelemetry.bindenv(this));
         }
 
         function _onConnected(error) {
@@ -347,42 +343,32 @@ CfgStateExample <- {
         }
     }
 }
-
-local count = 0;
-// RUNTIME
-// ---------------------------------------------------------------------------------
-function loop(){
-    //imp.sleep(1);
-    count ++;
-    server.log(count);
-    if (count > 1)
-    {
-    cfgStateExample.publishTelemetry();
-    }
-    imp.wakeup(60, loop);
-}
-
-//loop();
-// Start the readings loop
-
-
-
+//------------------ On Connection Change ---------------------
+/* on connect we need to check if we have settings to send and send
+*  as the server is independant of the the client
+*/
 device.onconnect(function() {
     status.deviceStatus = true;
-    cfgStateExample.sendStatusOLOLUpdate();
+    // Update the server that we are online
+    MEMS_Device.sendStatusOLOLUpdate();
+    // get the last set of settings
     local settings = server.load();
+    // Let the user know
     server.log("Setting are " + settings);
+    // Only if valid
     if (settings.len() != 0) 
     {
+        // encode and send to the device
         local settingToUse = JSONEncoder.encode(settings)
-    device.send("updateFromDataBase", settingToUse);
+        device.send("updateFromDataBase", settingToUse);
     }
     server.log("Device connected to agent");
 });
-
+/* on disconnect we need update the server
+*/
 device.ondisconnect(function() { 
     status.deviceStatus = false;
-    cfgStateExample.sendStatusOLOLUpdate();
+    MEMS_Device.sendStatusOLOLUpdate();
     server.log("Device disconnected from agent");
 });
 
@@ -396,7 +382,7 @@ function ReadingFromDevice (reading)
     // Format and save the data
     deviceReading = reading;
     GetDeviceInfo();
-    cfgStateExample.publishTelemetry();
+    MEMS_Device.publishTelemetry();
 }
 /*
 This function allows the device info to be read.
@@ -405,60 +391,6 @@ function GetDeviceInfo()
 {
     MEMSData.deviceURL = http.agenturl();
     MEMSData.deviceid  = imp.configparams.deviceid;
-}
-/*
-This function allows the user to read the database and update
-*/
-function UpdateDeviceData()
-{
-    GetDeviceInfo();
-    const url = "http://microenergymonitoring.appspot.com/UpdateSettings";
-    local headers = { "Content-Type" : "application/json"} ;
-    local body = {
-    "deviceURL" : MEMSData.deviceURL ,
-    "deviceid" : MEMSData.deviceid 
-    } ;
-   
-    server.log("Trying to update!");
-    // Convert to body
-    local jsonBody = http.jsonencode(body) ;
-    //  POST the values
-    local request = http.post(url, headers, jsonBody);
-    local response = request.sendsync();
-    server.log(response.body);
-    if (response.statuscode == 200)
-    {
-        server.log("Update responce gotten!");
-        local responceBodyText = response.body;
-        // First we find "deviceControlStatus"
-        local locationOfDeviceControlStatus = responceBodyText.find("deviceControlStatus");
-        // Next we split the substring out
-        local responceData = responceBodyText.slice((locationOfDeviceControlStatus-2),responceBodyText.len());
-        //DEBUG server.log("The device code was located @ "+ responceData);
-        // Parse the JSON
-        local result = JSONParser.parse(responceData);
-        // Convert to Sting to send to device
-        jsonString <- JSONEncoder.encode(result);
-        // Send the data to the device
-        device.send("updateFromDataBase", jsonString);
-        // After all that send the responce all OK.
-        ToRespondTo.send(200, "OK Update Completed Rebooting device afterwards");
-        
-    }
-    else
-    {
-        server.log("Update failed!");
-        ToRespondTo.send(500, "NOTOK Check the Script");
-    }
-}
-
-/*
-This function is a Callback on device responding to the GetSettings
-*/
-function deviceSettings(deviceSettings)
-{
-    // Respond with the 200 and settings
-    ToRespondTo.send(200, deviceSettings);
 }
 /*
 This function is the HTTP called Function.
@@ -470,21 +402,11 @@ function updateUnit(request, response)
   try 
   {
     server.log("Command Received Started" + request.query);
-    if ("UpdateDevice" in request.query) 
-    {
-        server.log("Update Device Command Received Update Started");
-        // Call the function that calls the database.
-        UpdateDeviceData();
-    }
-    else if ("RestartDevice" in request.query)
+    if ("RestartDevice" in request.query)
     {
         device.send("restart",0);
         // send a response back saying everything was OK.
         response.send(200, "OK Update Completed restart");
-    }
-    else if ("GetDeviceSettings" in request.query)
-    {
-        device.send("GetDeviceSettings",0);
     }
     else if ("GetStatus" in request.query)
     {
@@ -503,7 +425,7 @@ function updateUnit(request, response)
 http.onrequest(updateUnit);
 //------------------------------- DEVICE CALLBACKS ---------------------------------------------
 device.on("deviceReading", ReadingFromDevice)
-device.on("deviceSettings", deviceSettings)
+
 // Start Application
-cfgStateExample <- CfgStateExample.App();
-cfgStateExample.start();
+MEMS_Device <- MEMS_Device.App();
+MEMS_Device.start();
