@@ -15,6 +15,18 @@ Relay_2 <- hardware.pinB;
 // Assign pinA to a Relay Output 3
 Relay_3 <- hardware.pinC;
 //**************************** globals Definitions ************************
+// the alarms active
+local alarms = [];
+local sensorOneFaulty = false;
+local sensorTwoFaulty = false;
+local sensorThreeFaulty = false;
+local tempSensor1OverTempStart = null;
+local tempSensor2OverTempStart = null;
+local tempSensor3OverTempStart = null;
+local tempSensor1OverTempActive = false;
+local tempSensor2OverTempActive = false;
+local tempSensor3OverTempActive = false;
+
 // Assign a global variable to track both T1 T2 AND T3
 Tem_T1 <-0;
 Tem_T2 <-0;
@@ -83,7 +95,14 @@ deviceSettings.relayThreeSensorId <- "NULL";
 deviceSettings.relayThreeOnSetpoint <- -18;
 deviceSettings.relayThreeOffSetpoint <- -21;
 deviceSettings.settingsVersion <- -1;
-
+deviceSettings.thermalAlarmAfter <- 3600;
+deviceSettings.relayThreeFreezerLocation<-"unknown";
+deviceSettings.relayTwoFreezerLocation<-"unknown";
+deviceSettings.relayOneFreezerLocation<-"unknown";
+deviceSettings.relayOneFreezerName<-"unknown";
+deviceSettings.relayTwoFreezerName<-"unknown";
+deviceSettings.relayThreeFreezerName<-"unknown";
+server.log(deviceSettings.relayThreeFreezerLocation);
 // Used to track and send the device data to the agent.
 local deviceReading = {};
 deviceReading.relayOneSensor <-100;
@@ -91,24 +110,73 @@ deviceReading.relayTwoSensor <-100;
 deviceReading.relayThreeSensor <-100;
 deviceReading.pulseCount <-0;
 deviceReading.UnknownDevices <-"NONE";
+deviceReading.numberOfAciveAlarms <-0;
+deviceReading.alarms <-[];
 
 // Last Update Time
 local LastUpdateTime = 0;
+// ********************* Alarms *********************
+function setAlarm (type,description,sensor,location)
+{
+    local alarm = {};
+    local found = false;
+    alarm.type <- type;
+    alarm.description <- description;
+    alarm.sensor <- sensor;
+    alarm.location <- location;
+    foreach(activeAlarm in alarms)
+    {
+        if (activeAlarm.type == type && activeAlarm.sensor == sensor  )
+        {
+            found = true;
+            server.log("Found the alarm ");
+        }
+    }
+    if (found == false)
+    {
+        server.log("inserted the alarm");
+        getData(true) ;
+        alarms.insert(0,alarm);
+    }
+
+}
+function unsetAlarm (type,sensor)
+{
+    local count = 0;
+    foreach(activeAlarm in alarms)
+    {
+        if (activeAlarm.type == type && activeAlarm.sensor == sensor )
+        {
+            found = true;
+            server.log("Found the alarm Removing");
+            alarms.remove(count);
+        }
+        count++;
+    }
+
+
+}
 
 // ********************* Functions for Webserver *********************
-function getData() 
+function getData(forceUpdate) 
 {
     //server.log(deviceReading.relayOneSensor);
     //server.log(deviceReading.relayTwoSensor);
-    //server.log(deviceReading.relayThreeSensor);
-	
+   // server.log("thermal alarm after !" + deviceSettings.thermalAlarmAfter);
+   server.log(alarms.len());
+	foreach(alarm in alarms)
+	{
+	    server.log(alarm.sensor);
+	}
     // Calcaulte the trigger is active.
     local trigger = (hardware.millis() - LastUpdateTime) > deviceSettings.deviceLoggingInterval.tointeger();
     // Send the readings
-    if (trigger && (disconnectedFlag == false) )
+    if ((trigger || forceUpdate) && (disconnectedFlag == false) )
     {
     // set the pluse count as pulse count
     deviceReading.pulseCount = pulse_count;
+    deviceReading.numberOfAciveAlarms = alarms.len(); 
+    deviceReading.alarms = alarms;
     // Reset the pulse count
     pulse_count = 0;
     agent.send("deviceReading", deviceReading);
@@ -164,6 +232,13 @@ function readFlashAndUpdate()
         deviceSettings.relayThreeOnSetpoint = result.relayThreeOnSetpoint;
         deviceSettings.relayThreeOffSetpoint = result.relayThreeOffSetpoint;
         deviceSettings.settingsVersion = result.settingsVersion;
+        deviceSettings.thermalAlarmAfter = result.thermalAlarmAfter;
+        deviceSettings.relayThreeFreezerLocation=result.relayThreeFreezerLocation;
+        deviceSettings.relayTwoFreezerLocation=result.relayTwoFreezerLocation;
+        deviceSettings.relayOneFreezerLocation=result.relayOneFreezerLocation;
+        deviceSettings.relayOneFreezerName=result.relayOneFreezerName; 
+        deviceSettings.relayTwoFreezerName=result.relayTwoFreezerName; 
+        deviceSettings.relayThreeFreezerName=result.relayThreeFreezerName; 
         server.log("Updated from Flash :"+jsonStringFromFlash);
     }
     catch (err)
@@ -410,6 +485,217 @@ function getTemp() {
     }
     // Checks for Errors 
     CheckSensorsAreValid ();
+    CheckForOverTemp();
+}
+
+function CheckForOverTemp()
+{
+    // 1a. exists first of all 
+    if(TemSensor1Found == true)
+    {
+        if (sensorOneFaulty == true)
+        {
+            sensorOneFaulty = false;
+            local comment = "Sensor faulty ! ";
+            local sensor = deviceSettings.relayOneFreezerName;
+            
+            unsetAlarm(2,sensor);
+            
+        }
+        server.log(deviceReading.relayOneSensor);
+        // 2. if greater than the thershold 
+        if(deviceReading.relayOneSensor.tofloat() > deviceSettings.relayOneOnSetpoint.tofloat())
+        {
+            server.log("OT");
+            // 3a. if inactive the set active and update the time triggered
+            if (tempSensor1OverTempActive == false)
+            {
+                server.log("OverTemp Detected on Sensor 1");
+                tempSensor1OverTempActive = true; 
+                tempSensor1OverTempStart = time();
+                
+            }
+            // 3b. is already active
+            else
+            {
+                // We check if the alarm is to be driven high
+                if ((time() - tempSensor1OverTempStart) > deviceSettings.thermalAlarmAfter)
+                {
+                    // Rearm the alarm again as to allow a constant phase of alarm respoce as user may clear give a chance
+                    tempSensor1OverTempStart = time();
+                    
+                    local sensor = deviceSettings.relayOneFreezerName;
+                    local description = "A over temperture alarm has been raised as the sensor has detected that the temperture was greater than " + deviceSettings.relayOneOnSetpoint + " for greater than " + deviceSettings.thermalAlarmAfter + " seconds please check the unit.";
+                    local location = deviceSettings.relayOneFreezerLocation;
+                    setAlarm(1,description,sensor,location);
+                }
+            }
+        }
+        //1b. alarm is ok
+        else
+        {
+            if (tempSensor1OverTempActive == true)
+            {
+            // Clear and ack the alarm
+            tempSensor1OverTempActive = false;
+            local sensor = deviceSettings.relayOneFreezerName;
+            unsetAlarm(1,sensor);
+            }
+        }
+    }
+    else
+    {
+        // If the device is not detected we check that the user has assigned a sensor
+        if (deviceSettings.relayOneSensorId != "NULL")
+        {   
+            // If reported Faulty no need to do twice.
+            if ( sensorOneFaulty == false)
+            {
+            server.log("Sensor 1 Faulty");
+            sensorOneFaulty = true;
+            local description = "Sensor was not located or has failed to read correctly please address and check unit. ";
+            local sensor = deviceSettings.relayOneFreezerName ;
+            local location = deviceSettings.relayOneFreezerLocation;
+            setAlarm(2,description,sensor,location);
+            }
+        }
+    }
+    // ------------------------ Sensor 2 --------------------------------
+     // 1a. exists first of all 
+    if(TemSensor2Found == true)
+    {
+        if (sensorTwoFaulty == true)
+        {
+            sensorTwoFaulty = false;
+            local sensor = deviceSettings.relayTwoFreezerName ;
+            unsetAlarm(2,sensor);
+            
+        }
+        server.log(deviceReading.relayTwoSensor);
+        // 2. if greater than the thershold 
+        if(deviceReading.relayTwoSensor.tofloat() > deviceSettings.relayTwoOnSetpoint.tofloat())
+        {
+            server.log("OT");
+            // 3a. if inactive the set active and update the time triggered
+            if (tempSensor2OverTempActive == false)
+            {
+                server.log("OverTemp Detected on Sensor 2");
+                tempSensor2OverTempActive = true; 
+                tempSensor2OverTempStart = time();
+                
+            }
+            // 3b. is already active
+            else
+            {
+                // We check if the alarm is to be driven high
+                if ((time() - tempSensor2OverTempStart) > deviceSettings.thermalAlarmAfter)
+                {
+                    // Rearm the alarm again as to allow a constant phase of alarm respoce as user may clear give a chance
+                    tempSensor2OverTempStart = time();
+                    local sensor = deviceSettings.relayTwoFreezerName;
+                    local description = "A over temperture alarm has been raised as the sensor has detected that the temperture was greater than " + deviceSettings.relayTwoOnSetpoint + " for greater than " + deviceSettings.thermalAlarmAfter + " seconds please check the unit.";
+                    local location = deviceSettings.relayTwoFreezerLocation;
+                    setAlarm(1,description,sensor,location);
+                }
+            }
+        }
+        //1b. alarm is ok
+        else
+        {
+            if (tempSensor2OverTempActive == true)
+            {
+            // Clear and ack the alarm
+            tempSensor2OverTempActive = false;
+            local sensor = deviceSettings.relayTwoFreezerName ;
+            unsetAlarm(1,sensor);
+            }
+        }
+    }
+    else
+    {
+        // If the device is not detected we check that the user has assigned a sensor
+        if (deviceSettings.relayTwoSensorId != "NULL")
+        {   
+            // If reported Faulty no need to do twice.
+            if ( sensorTwoFaulty == false)
+            {
+            server.log("Sensor 2 Faulty");
+            sensorTwoFaulty = true;
+            local description = "Sensor was not located or has failed to read correctly please address and check unit. ";
+            local sensor = deviceSettings.relayTwoFreezerName;
+            local location = deviceSettings.relayTwoFreezerLocation;
+            setAlarm(2,description,sensor,location);
+            }
+        }
+    }
+    //------------------------------ Sensor 3 ---------------------------------------
+     // 1a. exists first of all 
+    if(TemSensor3Found == true)
+    {
+        if (sensorThreeFaulty == true)
+        {
+            sensorThreeFaulty = false;
+            local sensor = deviceSettings.relayThreeFreezerName;
+            unsetAlarm(2,sensor);
+            
+        }
+        server.log(deviceReading.relayThreeSensor);
+        // 2. if greater than the thershold 
+        if(deviceReading.relayThreeSensor.tofloat() > deviceSettings.relayThreeOnSetpoint.tofloat())
+        {
+            server.log("OT");
+            // 3a. if inactive the set active and update the time triggered
+            if (tempSensor3OverTempActive == false)
+            {
+                server.log("OverTemp Detected on Sensor 3");
+                tempSensor3OverTempActive = true; 
+                tempSensor3OverTempStart = time();
+                
+            }
+            // 3b. is already active
+            else
+            {
+                // We check if the alarm is to be driven high
+                if ((time() - tempSensor3OverTempStart) > deviceSettings.thermalAlarmAfter)
+                {
+                    // Rearm the alarm again as to allow a constant phase of alarm respoce as user may clear give a chance
+                    tempSensor3OverTempStart = time();
+                    local sensor = deviceSettings.relayThreeFreezerName;
+                    local description = "A over temperture alarm has been raised as the sensor has detected that the temperture was greater than " + deviceSettings.relayThreeOnSetpoint + " for greater than " + deviceSettings.thermalAlarmAfter + " seconds please check the unit.";
+                    local location = deviceSettings.relayThreeFreezerLocation;
+                    setAlarm(1,description,sensor,location);
+                }
+            }
+        }
+        //1b. alarm is ok
+        else
+        {
+            if (tempSensor3OverTempActive == true)
+            {
+            // Clear and ack the alarm
+            tempSensor3OverTempActive = false;
+            local sensor = deviceSettings.relayThreeFreezerName ;
+            unsetAlarm(1,sensor);
+            }
+        }
+    }
+    else
+    {
+        // If the device is not detected we check that the user has assigned a sensor
+        if (deviceSettings.relayThreeSensorId != "NULL")
+        {   
+            // If reported Faulty no need to do twice.
+            if ( sensorThreeFaulty == false)
+            {
+            server.log("Sensor 3 Faulty");
+            sensorOneFaulty = true;
+            local description = "Sensor was not located or has failed to read correctly please address and check unit. ";
+            local sensor = deviceSettings.relayThreeFreezerName ;
+            local location = deviceSettings.relayThreeFreezerLocation;
+            setAlarm(2,description,sensor,location);
+            }
+        }
+    }
 }
 // CheckSensorsAreValid :: When using the unit a sensor maybe faulty or missing if so then we set the temperature to 100 as to tell it to force a reset of the relay to off i.e. power to fridge
 // Using the Var TemSensorNFound where N is the Sensor ID to catch this action...
@@ -563,7 +849,7 @@ function mainProgramLoop()
   // Ensure the program loops safely every second
   getTemp();
   SetRelay();
-  getData();
+  getData(false);
   imp.wakeup(1.0, mainProgramLoop);
 }
 //****************************** Connect - Reconnect ******************************
